@@ -19,6 +19,9 @@ Binaries for the probe, rotalyze, and reduce software from the Richardson Lab ar
 can be downloaded as part of the MolProbity software package (https://github.com/rlabduke/MolProbity) and 
 paths to the binaries can be passed as command-line arguments to ligand_database.py
 
+Lastly, the Combs2 conda environment has all the necessary prerequisite Python packages for 
+ligand_database.py, the script that provides the primary user interface of this package, to run.
+
 ligand_database.py was designed for compatibility with the directory structure of PDB mirrors from the 
 PDB FTP server, which groups structures based on the middle two characters of their accession code. As 
 such, the code should be run independently on each of the 1060 directories in the mirror. Output from 
