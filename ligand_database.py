@@ -15,10 +15,19 @@ from probe import *
 
 from probe import timeout
 
-_reduce = '/wynton/home/degradolab/rkormos/reduce/reduce_src/reduce'
-_probe = '/wynton/home/degradolab/rkormos/probe/probe'
-_rotalyze = ('/salilab/diva1/programs/x86_64linux/phenix-1.19.1.4122/'
-             'phenix-1.19.1-4122/build/bin/phenix.rotalyze')
+"""
+Updated pdb files and validation reports should be downloaded via the 
+pdb ftp server:
+
+> rsync -rlpt -v -z --delete --port=33444 
+  rsync.rcsb.org::ftp_data/structures/divided/pdb/ $LOCAL_PDB_MIRROR_PATH
+
+> rsync -rlpt -v -z --delete --include="*/" --include="*.xml.gz" --exclude="*"  
+  --port=33444 rsync.rcsb.org::ftp/validation_reports/ $LOCAL_VALIDATION_PATH
+
+These two paths should be provided using the -e and -v arguments to this 
+script, respectively.
+"""
 
 resnames_aa_20 = ['CYS', 'ASP', 'SER', 'GLN', 'LYS',
                   'ILE', 'PRO', 'THR', 'PHE', 'ASN',
@@ -217,19 +226,22 @@ def write_biounits(ent_gz_paths, pdb_tmp_dir, water_csv_path=None,
     return bio_paths, chain_pair_dicts
 
 
-def reduce_pdbs(pdb_list, hetdict_path=None):
+def reduce_pdbs(pdb_list, reduce_path, hetdict_path=None):
     """Add hydrogens to a list of PDB files using the Reduce program.
 
     Parameters
     ----------
     pdb_list : list
         List of paths to PDB files to be reduced.
+    reduce_path : str
+        Path to reduce binary.
     hetdict_path : str
         Path to het_dict specifying for the Reduce program how ligands 
         should be protonated.
     """
     for p in pdb_list:
-        cmd = [_reduce, '-TRIM', p, '>', p + '_trimreduce', ';', _reduce]
+        cmd = [reduce_path, '-TRIM', p, '>', p + '_trimreduce', 
+               ';', reduce_path]
         if hetdict_path is not None:
             cmd += ['-DB', hetdict_path]
         cmd += ['-BUILD', p + '_trimreduce', '>', p + '_reduce', ';', 
@@ -275,7 +287,8 @@ def transfer_O3(struct):
 
 def pdbs_to_pkl(pdb_list, chain_pair_dicts, validation_dir, 
                 probe_outdir, rotalyze_outdir, prody_pkl_outdir, 
-                validation_pkl_outdir, retry=False):
+                validation_pkl_outdir, probe_path, rotalyze_path, 
+                retry=False):
     """Use the Probe software to evaluate ligand contacts in a list of PDBs.
        Then, use the phenix.rotalyze software to evaluate rotamers for each.
        Last, execute DSSP on each and pickle the resulting ProDy objects.
@@ -300,6 +313,10 @@ def pdbs_to_pkl(pdb_list, chain_pair_dicts, validation_dir,
         Path to directory at which to output pickled dataframes containing 
         validation information, backbone B-factor statistics, and a list of 
         all non-protein residues for the biological assembly.
+    probe_path : str
+        Path to probe binary.
+    rotalyze_path : str
+        Path to rotalyze binary.
     retry : bool
         If True, run as if the code has already run but did not complete.
     """
@@ -389,8 +406,10 @@ def pdbs_to_pkl(pdb_list, chain_pair_dicts, validation_dir,
                 prev_sites.append(site)
             # run probe software to analyze binding site
             try:
-                probe_df = parse_probe(p, segname1=seg_lig, chain1=chid_lig, 
-                                       resnum1=resi_lig, path_to_probe=_probe)
+                probe_df = parse_probe(p, segname1=seg_lig, 
+                                       chain1=chid_lig, 
+                                       resnum1=resi_lig, 
+                                       path_to_probe=probe_path)
             except TimeoutError:
                 break
             if not len(probe_df):
@@ -445,7 +464,8 @@ def pdbs_to_pkl(pdb_list, chain_pair_dicts, validation_dir,
             ligs = ' '.join(lig_set)
             val_data.append(tuple([name] + data + 
                                   [avg_bb_beta, sigma_bb_beta, ligs]))
-            parse_rotalyze(p, _rotalyze, rotalyze_outdir + '/' + pdb_name[1:3])
+            parse_rotalyze(p, rotalyze_path, 
+                           rotalyze_outdir + '/' + pdb_name[1:3])
             pr.execDSSP(p, outputdir=basename)
             pr.parseDSSP(basename + name + '.dssp', b)
             if len(contact_segs) and '' not in contact_segs:
@@ -480,8 +500,9 @@ def pdbs_to_pkl(pdb_list, chain_pair_dicts, validation_dir,
 def ent_gz_dir_to_combs_db_files(ent_gz_dir, validation_dir, 
                                  prody_pkl_outdir, rotalyze_outdir, 
                                  probe_outdir, validation_outdir, pdb_tmp_dir, 
-                                 water_csv_path=None, pdb_het_dict=None, 
-                                 max_ligands=25, retry=False):
+                                 reduce_path, probe_path, rotalyze_path, 
+                                 max_ligands=25, water_csv_path=None, 
+                                 pdb_het_dict=None, retry=False):
     """Generate input files for COMBS database generation from ent.gz files.
 
     Parameters
@@ -502,6 +523,15 @@ def ent_gz_dir_to_combs_db_files(ent_gz_dir, validation_dir,
         Path to directory at which to output pickled validation dataframes.
     pdb_tmp_dir : str
         Temporary directory at which to output unzipped ent files.
+    reduce_path : str
+        Path to reduce binary.
+    probe_path : str
+        Path to probe binary.
+    rotalyze_path : str
+        Path to rotalyze binary.
+    max_ligands : int
+        Maximum number of heteroatom (i.e. non-protein, non-nucleic, and 
+        non-water) residues to permit in a biological assembly.
     water_csv_path : str
         Path to CSV containing water molecules to include, with columns 
         'pdb_code' (the entries of which are formatted pdbXXXX, with 
@@ -509,9 +539,6 @@ def ent_gz_dir_to_combs_db_files(ent_gz_dir, validation_dir,
     pdb_het_dict : str
         Path to het_dict specifying for the Reduce program how ligands 
         should be protonated.
-    max_ligands : int
-        Maximum number of heteroatom (i.e. non-protein, non-nucleic, and 
-        non-water) residues to permit in a biological assembly.
     retry : bool
         Run as if the code has already been run but did not complete.
     """
@@ -526,10 +553,10 @@ def ent_gz_dir_to_combs_db_files(ent_gz_dir, validation_dir,
                                                  water_csv_path, 
                                                  write=(not retry))
     if not retry:
-        reduce_pdbs(bio_paths, pdb_het_dict)
+        reduce_pdbs(bio_paths, reduce_path, pdb_het_dict)
     pdbs_to_pkl(bio_paths, chain_pair_dicts, validation_dir, 
                 probe_outdir, rotalyze_outdir, prody_pkl_outdir, 
-                validation_outdir, retry)
+                validation_outdir, probe_path, rotalyze_path, retry)
 
 
 def parse_args():
@@ -552,17 +579,20 @@ def parse_args():
                       default='/wynton/scratch/rian.kormos/tmp_pdbs/', 
                       help="Temporary directory at which to output unzipped "
                       "ent files.")
-    argp.add_argument('-w', '--water-csv-path', 
-                      help="Path to CSV file containing water molecules to "
-                      "be added to the database (see docstrings for more "
-                      "information).")
-    argp.add_argument('-d', '--pdb-het-dict', help="Path to het_dict "
-                      "specifying for the Reduce program how ligands "
-                      "should be protonated.")
+    argp.add_argument("--reduce-path", help="Path to reduce binary.")
+    argp.add_argument("--probe-path", help="Path to probe binary.")
+    argp.add_argument("--rotalyze-path", help="Path to rotalyze binary.")
     argp.add_argument('-m', '--max-ligands', type=int, default=25, 
                       help="Maximum number of heteroatom (i.e. non-protein, "
                       "non-nucleic, and non-water) residues to permit in a "
                       "biological assembly.")
+    argp.add_argument('-w', '--water-csv-path', 
+                      help="Path to CSV file containing water molecules to "
+                      "be added to the database (optional, see docstrings for "
+                      "more information).")
+    argp.add_argument('-d', '--pdb-het-dict', help="Path to het_dict "
+                      "specifying for the Reduce program how ligands "
+                      "should be protonated (optional).")
     argp.add_argument('--retry', action='store_true', 
                       help="Run as if the code has already been run but "
                       "did not complete (i.e. finish generating the files "
@@ -572,9 +602,20 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
+    _reduce = '/wynton/home/degradolab/rkormos/reduce/reduce_src/reduce'
+    _probe = '/wynton/home/degradolab/rkormos/probe/probe'
+    _rotalyze = ('/salilab/diva1/programs/x86_64linux/phenix-1.19.1.4122/'
+                 'phenix-1.19.1-4122/build/bin/phenix.rotalyze')
+    if args.reduce is None:
+        args.reduce = _reduce
+    if args.probe is None:
+        args.probe = _probe
+    if args.rotalyze is None:
+        args.rotalyze = _rotalyze
     ent_gz_dir_to_combs_db_files(args.ent_gz_dir, args.validation_dir, 
                                  args.prody_pkl_outdir, args.rotalyze_outdir, 
                                  args.probe_outdir, args.validation_outdir, 
-                                 args.pdb_tmp_dir, args.water_csv_path, 
-                                 args.pdb_het_dict, args.max_ligands, 
-                                 args.retry)
+                                 args.pdb_tmp_dir, args.reduce_path, 
+                                 args.probe_path, args.rotalyze_path, 
+                                 args.max_ligands, args.water_csv_path, 
+                                 args.pdb_het_dict, args.retry)
